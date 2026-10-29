@@ -1,0 +1,91 @@
+// Prisma schema — Dashboard Agrégateur de Données
+// docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Une source de données externe (API tierce)
+model Source {
+  id         Int              @id @default(autoincrement())
+  key        String           @unique // ex: "rest-countries"
+  name       String // ex: "REST Countries"
+  baseUrl    String
+  lastSyncAt DateTime?
+  createdAt  DateTime         @default(now())
+  snapshots  MetricSnapshot[]
+  ingestLogs IngestLog[]
+
+  @@map("sources")
+}
+
+/// Point de mesure brut horodaté — modèle générique multi-sources.
+/// Permet d'ajouter une source sans migration (value = payload JSON typé côté app).
+model MetricSnapshot {
+  id         Int      @id @default(autoincrement())
+  source     Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  sourceId   Int
+  metricKey  String // ex: "country.population", "air.aqi"
+  dimension  String // ex: code pays, nom de ville — agrège par cette clé
+  value      Json // payload numérique / objet typé côté app
+  capturedAt DateTime @default(now())
+
+  @@index([metricKey, capturedAt])
+  @@index([sourceId, dimension])
+  @@map("metric_snapshots")
+}
+
+/// Table typée : économie des pays (REST Countries + World Bank)
+model CountryEconomy {
+  id         Int      @id @default(autoincrement())
+  code       String // ISO3 (ex: FRA)
+  name       String
+  region     String?
+  subregion  String?
+  population Int?
+  area       Float?
+  gdpGrowth  Float? // % croissance annuelle du PIB (World Bank)
+  gdpYear    Int?
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  @@unique([code])
+  @@index([region])
+  @@map("country_economies")
+}
+
+/// Table typée : qualité de l'air par ville (Open-Meteo)
+model CityAirQuality {
+  id         Int      @id @default(autoincrement())
+  city       String
+  country    String?
+  latitude   Float
+  longitude  Float
+  aqi        Int? // Air Quality Index US
+  pm25       Float?
+  pm10       Float?
+  measuredAt DateTime
+
+  @@index([city, measuredAt])
+  @@map("city_air_quality")
+}
+
+/// Observabilité des runs d'ingestion
+model IngestLog {
+  id         Int      @id @default(autoincrement())
+  source     Source?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  sourceId   Int?
+  status     String // ok | error | partial
+  records    Int      @default(0)
+  durationMs Int      @default(0)
+  error      String?
+  startedAt  DateTime @default(now())
+
+  @@index([sourceId, startedAt])
+  @@map("ingest_logs")
+}
