@@ -1,51 +1,59 @@
 import { fetchJson } from "../http-client";
 
 /**
- * World Bank API — croissance du PIB (%) par pays et par année (sans clé API).
- * Réponse typée : [meta, records] avec `value` null pour les années manquantes.
+ * World Bank API — indicateurs par pays, SANS clé API.
+ * - NY.GDP.MKTP.KD.ZG : croissance du PIB (%, annuel)
+ * - SP.POP.TOTL       : population totale
+ * L'API pagine par défaut à 50 lignes/page → on passe `per_page` explicite.
  */
+const BASE = "https://api.worldbank.org/v2";
+
+export type WbIndicator = "NY.GDP.MKTP.KD.ZG" | "SP.POP.TOTL";
+
 interface WbRecord {
-  date: string; // "2023"
+  date: string; // "2024"
   countryiso3code: string;
   value: number | null;
 }
 
-const indicator = "NY.GDP.MKTP.KD.ZG"; // GDP growth (annual %)
-const COUNTRIES = ["FR", "US", "DE", "GB", "JP", "BR", "IN", "CA"];
+type WbResponse = [{ pages?: number; total?: number }, WbRecord[] | null];
 
-export interface GdpPoint {
-  codeIso2: string;
+export interface YearlyPoint {
+  codeIso3: string;
   year: number;
-  growth: number;
+  value: number;
 }
 
-export async function fetchGdpGrowth(years = 10): Promise<GdpPoint[]> {
-  const startYear = new Date().getFullYear() - years;
-  const iso2toIso3: Record<string, string> = {
-    FR: "FRA", US: "USA", DE: "DEU", GB: "GBR", JP: "JPN", BR: "BRA", IN: "IND", CA: "CAN"
-  };
+/** Récupère un indicateur pour tous les pays sur une plage d'années. */
+export async function fetchWorldBank(
+  indicator: WbIndicator,
+  startYear: number,
+  endYear: number
+): Promise<YearlyPoint[]> {
+  const url =
+    `${BASE}/country/ALL/indicator/${indicator}` +
+    `?format=json&date=${startYear}:${endYear}&per_page=20000`;
 
-  const results = await Promise.all(
-    COUNTRIES.map(async (iso2) => {
-      const url =
-        `https://api.worldbank.org/v2/country/${iso2}/indicator/${indicator}` +
-        `?format=json&date=${startYear}:${new Date().getFullYear()}`;
-      try {
-        const raw = await fetchJson<[unknown, WbRecord[]]>(url, { timeoutMs: 15_000 });
-        const records = Array.isArray(raw?.[1]) ? raw[1] : [];
-        return records
-          .filter((r) => typeof r.value === "number")
-          .map((r) => ({
-            codeIso2: iso2,
-            year: Number(r.date),
-            growth: r.value as number
-          }));
-      } catch {
-        return [] as GdpPoint[];
-      }
-    })
-  );
+  const raw = await fetchJson<WbResponse>(url, { timeoutMs: 20_000 });
+  const records = Array.isArray(raw?.[1]) ? raw[1] : [];
 
-  // aplati + attache l'ISO3 pour joindre CountryEconomy
-  return results.flat().map((p) => ({ ...p, codeIso2: iso2toIso3[p.codeIso2] ?? p.codeIso2 }));
+  return records
+    .filter((r) => typeof r.value === "number" && /^[A-Z]{3}$/.test(r.countryiso3code))
+    .map((r) => ({
+      codeIso3: r.countryiso3code,
+      year: Number(r.date),
+      value: r.value as number
+    }));
+}
+
+/** Convenience : croissance du PIB sur `years` années glissantes. */
+export async function fetchGdpGrowth(years = 10): Promise<YearlyPoint[]> {
+  const end = new Date().getFullYear();
+  return fetchWorldBank("NY.GDP.MKTP.KD.ZG", end - years, end);
+}
+
+/** Convenience : population totale (dernières valeurs connues). */
+export async function fetchPopulation(years = 3): Promise<YearlyPoint[]> {
+  const end = new Date().getFullYear();
+  return fetchWorldBank("SP.POP.TOTL", end - years, end);
 }
